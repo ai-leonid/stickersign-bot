@@ -1,0 +1,84 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum GenerationJobStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model User {
+  id             String   @id @default(cuid())
+  telegramUserId BigInt   @unique
+  username       String?
+  createdAt      DateTime @default(now())
+  packs          Pack[]
+}
+
+model Pack {
+  id                    String        @id @default(cuid())
+  ownerId               String
+  title                 String
+  slug                  String        @unique
+  telegramPackId        String?       @unique
+  isCustomButtonEnabled Boolean       @default(false)
+  phrase                String
+  gridSize              Int           @default(25)
+  stylePresetId         String?
+  createdAt             DateTime      @default(now())
+  owner                 User          @relation(fields: [ownerId], references: [id])
+  stylePreset           StylePreset?  @relation(fields: [stylePresetId], references: [id])
+  stickers              Sticker[]
+  jobs                  GenerationJob[]
+}
+
+model Sticker {
+  id            String    @id @default(cuid())
+  packId        String
+  position      Int
+  letter        String?
+  fileId        String?
+  isPlaceholder Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  pack          Pack      @relation(fields: [packId], references: [id])
+  file          MediaFile? @relation(fields: [fileId], references: [id])
+
+  @@unique([packId, position])
+}
+
+model MediaFile {
+  id          String    @id @default(cuid())
+  type        String
+  storagePath String
+  hash        String?   @unique
+  size        Int
+  createdAt   DateTime  @default(now())
+  stickers    Sticker[]
+}
+
+model StylePreset {
+  id              String   @id @default(cuid())
+  fontFamily      String
+  fontSize        Int
+  fontColor       String
+  strokeColor     String
+  backgroundColor String
+  createdAt       DateTime @default(now())
+  packs           Pack[]
+}
+
+model GenerationJob {
+  id           String              @id @default(cuid())
+  packId       String
+  status       GenerationJobStatus @default(PENDING)
+  errorMessage String?
+  createdAt    DateTime            @default(now())
+  pack         Pack                @relation(fields: [packId], references: [id])
+}
