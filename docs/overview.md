@@ -4,7 +4,7 @@
 
 ## Технологический стек
 - NestJS 11, Node.js 20+, TypeScript
-- Telegram: telegraf, @nestjs/telegraf
+- Telegram: grammy
 - PostgreSQL + Prisma ORM
 - Очереди: bullmq, @nestjs/bullmq, ioredis
 - Генерация изображений: @napi-rs/canvas, sharp

@@ -15,3 +15,7 @@
 - Логи ошибок Telegram API
 - Метрики времени генерации стикеров
 - Метрики очередей bullmq
+
+## Docker Compose
+- Локальные сервисы: PostgreSQL и Redis
+- Рекомендуемый файл: docker-compose.yml в корне проекта

@@ -17,7 +17,7 @@
 
 ## Технологические
 - Backend: NestJS 11, TypeScript
-- Telegram: telegraf, @nestjs/telegraf
+- Telegram: grammy
 - База данных: PostgreSQL + Prisma ORM
 - Очереди: bullmq + ioredis
 - Генерация изображений: @napi-rs/canvas, sharp

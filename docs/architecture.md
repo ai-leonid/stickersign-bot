@@ -9,7 +9,7 @@
 - JobModule: очередь задач генерации и ретраи
 
 ## Инфраструктурные компоненты
-- TelegramAdapter: telegraf + @nestjs/telegraf
+- TelegramAdapter: grammy
 - StorageAdapter: локальное FS, опционально S3
 - QueueAdapter: bullmq + ioredis
 - LoggerAdapter: pino + nestjs-pino

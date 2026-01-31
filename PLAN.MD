@@ -3,7 +3,7 @@
 
 ## Стек и библиотеки
 - NestJS 11, Node.js 20+, TypeScript
-- Telegram: telegraf, @nestjs/telegraf
+- Telegram: grammy
 - БД: PostgreSQL, Prisma ORM, @prisma/client
 - Валидация и конфиг: @nestjs/config, class-validator, class-transformer
 - Очереди и фоновые задачи: bullmq, @nestjs/bullmq, ioredis
@@ -37,13 +37,16 @@ src/
     telegram/
     storage/
     queue/
+    logging/
 prisma/
   schema.prisma
   migrations/
+docker-compose.yml
 ```
 
 ## Псевдокод (детально)
 1. Получить входное событие от Telegram:
+   - принять апдейт через grammy
    - определить команду пользователя
    - извлечь текст фразы
    - при наличии извлечь пользовательское изображение
@@ -85,6 +88,7 @@ prisma/
 - [ ] Подготовить список зависимостей и их назначение
 - [ ] Определить схему конфигурации окружения
 - [ ] Определить целевое хранилище изображений
+- [ ] Подготовить docker-compose для локальной БД и очередей
 
 ### 1. Анализ и требования
 - [ ] Зафиксировать ключевые сценарии и ограничения Telegram
@@ -94,7 +98,7 @@ prisma/
 
 ### 2. Интеграция с Telegram
 - [ ] Выбрать режим webhook или long polling для старта
-- [ ] Описать адаптер Telegram API и точки интеграции на telegraf
+- [ ] Описать адаптер Telegram API и точки интеграции на grammy
 - [ ] Заложить обработку основных ошибок Telegram API
 - [ ] Спроектировать структуру команд бота и ответы
 
