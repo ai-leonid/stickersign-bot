@@ -13,6 +13,9 @@
 - slug
 - telegramPackId
 - isCustomButtonEnabled
+- phrase
+- gridSize
+- stylePresetId
 - createdAt
 
 ## Стикер
@@ -21,6 +24,7 @@
 - position
 - letter
 - fileId
+- isPlaceholder
 - createdAt
 
 ## Медиафайл
@@ -28,6 +32,16 @@
 - type
 - storagePath
 - hash
+- size
+- createdAt
+
+## Пресет стиля
+- id
+- fontFamily
+- fontSize
+- fontColor
+- strokeColor
+- backgroundColor
 - createdAt
 
 ## Задача генерации

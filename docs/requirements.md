@@ -14,3 +14,10 @@
 - Масштабируемость хранения изображений
 - Минимизация времени генерации набора
 - Предсказуемость порядка стикеров при любых входных данных
+
+## Технологические
+- Backend: NestJS 11, TypeScript
+- Telegram: telegraf, @nestjs/telegraf
+- База данных: PostgreSQL + Prisma ORM
+- Очереди: bullmq + ioredis
+- Генерация изображений: @napi-rs/canvas, sharp

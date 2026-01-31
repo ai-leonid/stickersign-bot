@@ -2,6 +2,30 @@
 
 Проект — телеграм-бот на NestJS, который создаёт стикерпак из букв, введённых пользователем. Основная идея — сформировать первые 25 стикеров набора так, чтобы в окне добавления стикеров (сетке 5x5) складывалось читаемое предложение.
 
+## Технологический стек
+- NestJS 11, Node.js 20+, TypeScript
+- Telegram: telegraf, @nestjs/telegraf
+- PostgreSQL + Prisma ORM
+- Очереди: bullmq, @nestjs/bullmq, ioredis
+- Генерация изображений: @napi-rs/canvas, sharp
+- Логи: pino, nestjs-pino
+- Конфигурация и валидация: @nestjs/config, class-validator, class-transformer
+
+## Структура проекта
+```
+src/
+  modules/
+    bot/
+    packs/
+    stickers/
+    media/
+    users/
+    jobs/
+  common/
+  infrastructure/
+prisma/
+```
+
 ## Ключевые цели
 - Генерация стикеров по буквам из пользовательской фразы
 - Формирование порядка стикеров в наборе для отображения 5x5
