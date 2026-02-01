@@ -259,6 +259,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         '/create "фраза" — создать новый набор',
         '/update <пак> "фраза" — обновить первые 25 стикеров',
         '/list — список ваших наборов',
+        '/help — полная инструкция',
         '/font — выбрать шрифт',
         '/color <цвет> — цвет букв (hex или rgb)',
         '/stroke <цвет> — цвет обводки (hex или rgb)',
