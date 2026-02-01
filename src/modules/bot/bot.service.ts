@@ -394,6 +394,10 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       }
     });
 
+    bot.command('help', async (ctx: Context) => {
+      await ctx.reply(this.formatHelpMessage());
+    });
+
     bot.command('list', async (ctx: Context) => {
       const telegramUserId = getTelegramUserId(ctx);
       if (!telegramUserId) {
@@ -679,6 +683,24 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     lines.push('');
     lines.push('Пример: /font 2 или /font "Impact"');
     return lines.join('\n');
+  }
+
+  private formatHelpMessage(): string {
+    return [
+      'Команды бота:',
+      '/create "фраза" — создать новый набор',
+      '/update <id|slug|название> "фраза" — обновить первые 25 стикеров',
+      '/list — список ваших наборов',
+      '/button <пак> — добавить кастомную кнопку-стикер',
+      '/font — список доступных шрифтов',
+      '/font 2 или /font "Impact" — выбрать шрифт',
+      '/color #ffcc00 — цвет букв',
+      '/stroke rgb(10,20,30) — цвет обводки',
+      '',
+      'Подсказки:',
+      'Фразу всегда можно передавать в кавычках, пробелы сохраняются.',
+      'Кнопка-стикер: PNG/WebP как файл, прозрачность обязательна.',
+    ].join('\n');
   }
 
   private async replyWithPackList(
