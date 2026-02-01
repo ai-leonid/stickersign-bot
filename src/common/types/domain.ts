@@ -65,6 +65,7 @@ export type GenerationJob = {
 
 export type CreatePackInput = {
   ownerId: string;
+  telegramUserId: bigint;
   title: string;
   slug: string;
   phrase: string;

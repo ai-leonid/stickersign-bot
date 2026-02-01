@@ -23,6 +23,7 @@ export class BotService {
     );
     const pack = await this.packManagerService.createPack({
       ownerId: user.id,
+      telegramUserId,
       title: phrase,
       slug: '',
       phrase,
