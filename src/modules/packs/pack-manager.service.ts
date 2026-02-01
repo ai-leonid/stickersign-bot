@@ -138,9 +138,15 @@ async function resizeToStickerBuffer(
 
 @Injectable()
 export class PackManagerService {
+  private readonly packsByUserId = new Map<bigint, Pack>();
+
   constructor(
     private readonly stickerGeneratorService: StickerGeneratorService,
   ) {}
+
+  getPackForUser(telegramUserId: bigint): Pack | null {
+    return this.packsByUserId.get(telegramUserId) ?? null;
+  }
 
   async createPack(input: CreatePackInput): Promise<Pack> {
     const config = getTelegramConfig();
@@ -160,7 +166,7 @@ export class PackManagerService {
       stickers,
     });
 
-    return {
+    const pack: Pack = {
       id: randomUUID(),
       ownerId: input.ownerId,
       title,
@@ -172,6 +178,8 @@ export class PackManagerService {
       stylePresetId: input.stylePresetId,
       createdAt: new Date(),
     };
+    this.packsByUserId.set(input.telegramUserId, pack);
+    return pack;
   }
 
   async updatePackStickers(
@@ -191,10 +199,12 @@ export class PackManagerService {
       stickers,
     });
 
-    return {
+    const updatedPack: Pack = {
       ...pack,
       phrase,
     };
+    this.packsByUserId.set(telegramUserId, updatedPack);
+    return updatedPack;
   }
 
   async addCustomButtonSticker(
@@ -240,10 +250,12 @@ export class PackManagerService {
       });
     }
 
-    return {
+    const updatedPack: Pack = {
       ...pack,
       isCustomButtonEnabled: true,
     };
+    this.packsByUserId.set(telegramUserId, updatedPack);
+    return updatedPack;
   }
 
   private async buildStickerPayloads(
