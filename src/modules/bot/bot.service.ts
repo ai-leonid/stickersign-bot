@@ -11,6 +11,25 @@ import { JobsService } from '../jobs/jobs.service';
 import { PackManagerService } from '../packs/pack-manager.service';
 import { UsersService } from '../users/users.service';
 
+const MAX_PHRASE_LENGTH = 200;
+const MAX_PHRASE_LINES = 5;
+const MAX_CUSTOM_BUTTON_FILE_SIZE = 5 * 1024 * 1024;
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const RATE_LIMITS = {
+  create: 3,
+  update: 5,
+  button: 3,
+};
+
+type PhraseValidationResult =
+  | { ok: true; value: string }
+  | { ok: false; errorMessage: string };
+
+type RateLimitState = {
+  count: number;
+  resetAt: number;
+};
+
 function getTelegramToken(): string {
   const token = process.env.TELEGRAM_BOT_TOKEN ?? '';
   if (!token) {
@@ -33,6 +52,98 @@ function extractCommandText(text: string | undefined): string {
   return text.replace(/^\/\w+(@\w+)?\s*/i, '').trim();
 }
 
+function normalizePhrase(value: string): string {
+  const normalized = value
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n')
+    .replace(/\t/g, ' ')
+    .normalize('NFC');
+
+  return normalized
+    .split('\n')
+    .map((line) => line.replace(/ {2,}/g, ' '))
+    .join('\n');
+}
+
+function isControlCharacter(char: string): boolean {
+  if (char === '\n') {
+    return false;
+  }
+  const code = char.codePointAt(0) ?? 0;
+  return code < 0x20 || code === 0x7f;
+}
+
+function validatePhrase(value: string): PhraseValidationResult {
+  const normalized = normalizePhrase(value).trim();
+  if (!normalized) {
+    return { ok: false, errorMessage: 'Фраза не должна быть пустой.' };
+  }
+  if (Array.from(normalized).length > MAX_PHRASE_LENGTH) {
+    return {
+      ok: false,
+      errorMessage: `Фраза слишком длинная. Максимум ${MAX_PHRASE_LENGTH} символов.`,
+    };
+  }
+  const lines = normalized.split('\n');
+  if (lines.length > MAX_PHRASE_LINES) {
+    return {
+      ok: false,
+      errorMessage: `Слишком много строк. Максимум ${MAX_PHRASE_LINES}.`,
+    };
+  }
+  for (const char of Array.from(normalized)) {
+    if (isControlCharacter(char)) {
+      return {
+        ok: false,
+        errorMessage: 'Фраза содержит недопустимые символы.',
+      };
+    }
+  }
+  const hasLetters = Array.from(normalized).some(
+    (char) => char !== ' ' && char !== '\n',
+  );
+  if (!hasLetters) {
+    return { ok: false, errorMessage: 'Фраза должна содержать символы.' };
+  }
+  return { ok: true, value: normalized };
+}
+
+function buildRateLimitKey(userId: bigint, action: string): string {
+  return `${userId.toString()}:${action}`;
+}
+
+function getRetryAfterSeconds(state: RateLimitState): number {
+  const now = Date.now();
+  return Math.max(1, Math.ceil((state.resetAt - now) / 1000));
+}
+
+function getUserErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('Sticker size exceeds Telegram limit')) {
+    return 'Стикер слишком большой для Telegram.';
+  }
+  if (message.includes('Sticker set exceeds Telegram limit')) {
+    return 'Набор переполнен. Достигнут лимит 120 стикеров.';
+  }
+  if (message.includes('Unsupported custom button image format')) {
+    return 'Поддерживаются только PNG или WebP с прозрачностью.';
+  }
+  if (message.includes('Custom button image must have transparency')) {
+    return 'Нужна прозрачность в PNG/WebP.';
+  }
+  if (message.includes('Custom button image is empty')) {
+    return 'Файл пустой.';
+  }
+  if (
+    message.includes('Telegram API error') ||
+    message.includes('retry limit') ||
+    message.includes('retry')
+  ) {
+    return 'Ошибка Telegram API. Попробуйте позже.';
+  }
+  return 'Произошла ошибка. Попробуйте позже.';
+}
+
 function getTelegramUserId(ctx: Context): bigint | null {
   const from = ctx.from;
   if (!from) {
@@ -45,6 +156,7 @@ function getTelegramUserId(ctx: Context): bigint | null {
 export class BotService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BotService.name);
   private readonly pendingCustomButtonUsers = new Set<bigint>();
+  private readonly rateLimits = new Map<string, RateLimitState>();
   private bot: Bot<Context> | null = null;
 
   constructor(
@@ -84,22 +196,44 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         await ctx.reply('Не удалось определить пользователя.');
         return;
       }
+      const validation = validatePhrase(phrase);
+      if (!validation.ok) {
+        this.logger.warn(
+          `Validation failed for create: ${validation.errorMessage}`,
+        );
+        await ctx.reply(validation.errorMessage);
+        return;
+      }
+      if (!this.isAllowed(telegramUserId, 'create', RATE_LIMITS.create)) {
+        const retryAfter = this.getRateLimitRetryAfter(
+          telegramUserId,
+          'create',
+        );
+        await ctx.reply(`Слишком часто. Повторите через ${retryAfter} сек.`);
+        return;
+      }
       const username = ctx.from?.username ?? null;
+      this.logger.log(
+        `Create request: user=${telegramUserId.toString()} username=${username ?? 'unknown'}`,
+      );
       await ctx.reply('Принял запрос. Начинаю генерацию стикеров.');
       try {
         const pack = await this.startPackCreation(
           telegramUserId,
           username,
-          phrase,
+          validation.value,
         );
         const link = buildPackLink(pack.telegramPackId);
         const reply = link
           ? `Набор готов: ${link}`
           : 'Набор готов и создан в Telegram.';
         await ctx.reply(reply);
+        this.logger.log(
+          `Pack created: user=${telegramUserId.toString()} pack=${pack.telegramPackId ?? pack.id}`,
+        );
       } catch (error) {
-        this.logger.error(error);
-        await ctx.reply('Не удалось создать набор. Попробуйте позже.');
+        this.logError('create', error);
+        await ctx.reply(getUserErrorMessage(error));
       }
     });
 
@@ -119,19 +253,41 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         await ctx.reply('Сначала создайте набор через /create.');
         return;
       }
+      const validation = validatePhrase(phrase);
+      if (!validation.ok) {
+        this.logger.warn(
+          `Validation failed for update: ${validation.errorMessage}`,
+        );
+        await ctx.reply(validation.errorMessage);
+        return;
+      }
+      if (!this.isAllowed(telegramUserId, 'update', RATE_LIMITS.update)) {
+        const retryAfter = this.getRateLimitRetryAfter(
+          telegramUserId,
+          'update',
+        );
+        await ctx.reply(`Слишком часто. Повторите через ${retryAfter} сек.`);
+        return;
+      }
+      this.logger.log(
+        `Update request: user=${telegramUserId.toString()} pack=${pack.telegramPackId ?? pack.id}`,
+      );
       await ctx.reply('Обновляю первые 25 стикеров.');
       try {
         const updatedPack = await this.packManagerService.updatePackStickers(
           pack,
           telegramUserId,
-          phrase,
+          validation.value,
         );
         const link = buildPackLink(updatedPack.telegramPackId);
         const reply = link ? `Набор обновлён: ${link}` : 'Набор обновлён.';
         await ctx.reply(reply);
+        this.logger.log(
+          `Pack updated: user=${telegramUserId.toString()} pack=${updatedPack.telegramPackId ?? updatedPack.id}`,
+        );
       } catch (error) {
-        this.logger.error(error);
-        await ctx.reply('Не удалось обновить набор. Попробуйте позже.');
+        this.logError('update', error);
+        await ctx.reply(getUserErrorMessage(error));
       }
     });
 
@@ -146,6 +302,17 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         await ctx.reply('Сначала создайте набор через /create.');
         return;
       }
+      if (!this.isAllowed(telegramUserId, 'button', RATE_LIMITS.button)) {
+        const retryAfter = this.getRateLimitRetryAfter(
+          telegramUserId,
+          'button',
+        );
+        await ctx.reply(`Слишком часто. Повторите через ${retryAfter} сек.`);
+        return;
+      }
+      this.logger.log(
+        `Custom button requested: user=${telegramUserId.toString()} pack=${pack.telegramPackId ?? pack.id}`,
+      );
       this.pendingCustomButtonUsers.add(telegramUserId);
       await ctx.reply(
         'Отправьте PNG или WebP с прозрачностью как файл (без сжатия).',
@@ -179,6 +346,15 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         await ctx.reply('Не удалось прочитать файл.');
         return;
       }
+      const fileSize = document.file_size ?? 0;
+      if (fileSize === 0) {
+        await ctx.reply('Файл пустой.');
+        return;
+      }
+      if (fileSize > MAX_CUSTOM_BUTTON_FILE_SIZE) {
+        await ctx.reply('Файл слишком большой. Максимум 5 МБ.');
+        return;
+      }
       const mimeType = document.mime_type ?? '';
       if (!['image/png', 'image/webp'].includes(mimeType)) {
         await ctx.reply('Поддерживаются только PNG или WebP с прозрачностью.');
@@ -203,16 +379,17 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
           ? `Кнопка добавлена: ${link}`
           : 'Кнопка добавлена в набор.';
         await ctx.reply(reply);
-      } catch (error) {
-        this.logger.error(error);
-        await ctx.reply(
-          'Не удалось добавить кнопку. Проверьте формат и прозрачность.',
+        this.logger.log(
+          `Custom button added: user=${telegramUserId.toString()} pack=${updatedPack.telegramPackId ?? updatedPack.id}`,
         );
+      } catch (error) {
+        this.logError('button', error);
+        await ctx.reply(getUserErrorMessage(error));
       }
     });
 
     bot.catch((error) => {
-      this.logger.error(error);
+      this.logError('bot', error);
     });
 
     void bot.start();
@@ -263,5 +440,40 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     }
     const arrayBuffer = await response.arrayBuffer();
     return Buffer.from(arrayBuffer);
+  }
+
+  private isAllowed(userId: bigint, action: string, limit: number): boolean {
+    const key = buildRateLimitKey(userId, action);
+    const now = Date.now();
+    const state = this.rateLimits.get(key);
+    if (!state || now >= state.resetAt) {
+      this.rateLimits.set(key, {
+        count: 1,
+        resetAt: now + RATE_LIMIT_WINDOW_MS,
+      });
+      return true;
+    }
+    if (state.count >= limit) {
+      return false;
+    }
+    state.count += 1;
+    return true;
+  }
+
+  private getRateLimitRetryAfter(userId: bigint, action: string): number {
+    const key = buildRateLimitKey(userId, action);
+    const state = this.rateLimits.get(key);
+    if (!state) {
+      return 1;
+    }
+    return getRetryAfterSeconds(state);
+  }
+
+  private logError(action: string, error: unknown): void {
+    if (error instanceof Error) {
+      this.logger.error(`[${action}] ${error.message}`, error.stack);
+      return;
+    }
+    this.logger.error(`[${action}] ${String(error)}`);
   }
 }
