@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { fontPresets } from '../../common/font-presets';
 import type { StylePreset, User, UserSettings } from '../../common/types';
 import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 
@@ -8,14 +9,6 @@ export class UsersService {
   private static readonly DEFAULT_STROKE_COLOR = '#000000';
   private static readonly DEFAULT_FONT_SIZE = 220;
   private static readonly DEFAULT_BACKGROUND = 'transparent';
-  private static readonly STYLE_PRESETS = [
-    { name: 'Impact', fontFamily: 'Impact' },
-    { name: 'Comic Sans MS', fontFamily: 'Comic Sans MS' },
-    { name: 'Arial Black', fontFamily: 'Arial Black' },
-    { name: 'Trebuchet MS', fontFamily: 'Trebuchet MS' },
-    { name: 'Georgia', fontFamily: 'Georgia' },
-  ];
-
   constructor(private readonly prisma: PrismaService) {}
 
   async getOrCreateUser(
@@ -162,12 +155,13 @@ export class UsersService {
 
   private async ensureStylePresets(): Promise<StylePreset[]> {
     const result: StylePreset[] = [];
-    for (const preset of UsersService.STYLE_PRESETS) {
+    for (const preset of fontPresets) {
+      const fontSize = preset.fontSize ?? UsersService.DEFAULT_FONT_SIZE;
       const created = await this.prisma.stylePreset.upsert({
         where: { name: preset.name },
         update: {
           fontFamily: preset.fontFamily,
-          fontSize: UsersService.DEFAULT_FONT_SIZE,
+          fontSize,
           fontColor: UsersService.DEFAULT_FONT_COLOR,
           strokeColor: UsersService.DEFAULT_STROKE_COLOR,
           backgroundColor: UsersService.DEFAULT_BACKGROUND,
@@ -175,7 +169,7 @@ export class UsersService {
         create: {
           name: preset.name,
           fontFamily: preset.fontFamily,
-          fontSize: UsersService.DEFAULT_FONT_SIZE,
+          fontSize,
           fontColor: UsersService.DEFAULT_FONT_COLOR,
           strokeColor: UsersService.DEFAULT_STROKE_COLOR,
           backgroundColor: UsersService.DEFAULT_BACKGROUND,
