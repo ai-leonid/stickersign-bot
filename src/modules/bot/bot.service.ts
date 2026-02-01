@@ -6,7 +6,7 @@ import {
 } from '@nestjs/common';
 import { Bot } from 'grammy';
 import type { Context } from 'grammy';
-import type { Pack } from '../../common/types';
+import type { Pack, StylePreset } from '../../common/types';
 import { JobsService } from '../jobs/jobs.service';
 import { PackManagerService } from '../packs/pack-manager.service';
 import { UsersService } from '../users/users.service';
@@ -28,6 +28,12 @@ type PhraseValidationResult =
 type RateLimitState = {
   count: number;
   resetAt: number;
+};
+
+type QuotedSegment = {
+  value: string;
+  start: number;
+  end: number;
 };
 
 function getTelegramToken(): string {
@@ -58,10 +64,9 @@ function normalizePhrase(value: string): string {
     .replace(/\r/g, '\n')
     .replace(/\t/g, ' ')
     .normalize('NFC');
-
   return normalized
     .split('\n')
-    .map((line) => line.replace(/ {2,}/g, ' '))
+    .map((line) => line.replace(/ +$/g, ''))
     .join('\n');
 }
 
@@ -74,8 +79,8 @@ function isControlCharacter(char: string): boolean {
 }
 
 function validatePhrase(value: string): PhraseValidationResult {
-  const normalized = normalizePhrase(value).trim();
-  if (!normalized) {
+  const normalized = normalizePhrase(value);
+  if (!normalized.trim()) {
     return { ok: false, errorMessage: 'Фраза не должна быть пустой.' };
   }
   if (Array.from(normalized).length > MAX_PHRASE_LENGTH) {
@@ -106,6 +111,82 @@ function validatePhrase(value: string): PhraseValidationResult {
     return { ok: false, errorMessage: 'Фраза должна содержать символы.' };
   }
   return { ok: true, value: normalized };
+}
+
+function extractQuotedSegments(text: string): QuotedSegment[] {
+  const segments: QuotedSegment[] = [];
+  const regex = /"([\s\S]*?)"/g;
+  let match = regex.exec(text);
+  while (match) {
+    const value = match[1] ?? '';
+    const start = match.index ?? 0;
+    const end = start + match[0].length;
+    segments.push({ value, start, end });
+    match = regex.exec(text);
+  }
+  return segments;
+}
+
+function extractQuotedText(text: string | undefined): string | null {
+  if (!text) {
+    return null;
+  }
+  const segments = extractQuotedSegments(text);
+  return segments[0]?.value ?? null;
+}
+
+function parseUpdatePayload(text: string | undefined): {
+  packKey: string | null;
+  phrase: string | null;
+} {
+  if (!text) {
+    return { packKey: null, phrase: null };
+  }
+  const stripped = text.replace(/^\/\w+(@\w+)?\s*/i, '');
+  const segments = extractQuotedSegments(stripped);
+  if (segments.length >= 2) {
+    return { packKey: segments[0].value, phrase: segments[1].value };
+  }
+  if (segments.length === 1) {
+    const prefix = stripped.slice(0, segments[0].start).trim();
+    return { packKey: prefix || null, phrase: segments[0].value };
+  }
+  return { packKey: null, phrase: null };
+}
+
+function normalizeColorInput(value: string): string | null {
+  const trimmed = value.trim().toLowerCase();
+  if (!trimmed) {
+    return null;
+  }
+  const shortHexMatch = trimmed.match(/^#?([0-9a-f]{3})$/i);
+  if (shortHexMatch) {
+    const [r, g, b] = shortHexMatch[1].split('');
+    return `#${r}${r}${g}${g}${b}${b}`;
+  }
+  const hexMatch = trimmed.match(/^#?([0-9a-f]{6})$/i);
+  if (hexMatch) {
+    return `#${hexMatch[1]}`;
+  }
+  const rgbMatch = trimmed.match(
+    /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/,
+  );
+  if (rgbMatch) {
+    const numbers = rgbMatch.slice(1, 4).map((item) => Number(item));
+    if (numbers.every((num) => num >= 0 && num <= 255)) {
+      const [r, g, b] = numbers.map((num) => num.toString(16).padStart(2, '0'));
+      return `#${r}${g}${b}`;
+    }
+  }
+  return null;
+}
+
+function stripWrappingQuotes(value: string): string {
+  const trimmed = value.trim();
+  if (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) {
+    return trimmed.slice(1, -1);
+  }
+  return trimmed;
 }
 
 function buildRateLimitKey(userId: bigint, action: string): string {
@@ -155,7 +236,7 @@ function getTelegramUserId(ctx: Context): bigint | null {
 @Injectable()
 export class BotService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BotService.name);
-  private readonly pendingCustomButtonUsers = new Set<bigint>();
+  private readonly pendingCustomButtonUsers = new Map<bigint, string>();
   private readonly rateLimits = new Map<string, RateLimitState>();
   private bot: Bot<Context> | null = null;
 
@@ -175,20 +256,24 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         'Привет! Я создаю стикерпак из вашей фразы.',
         '',
         'Команды:',
-        '/create <фраза> — создать новый набор',
-        '/update <фраза> — обновить первые 25 стикеров',
-        '/button — добавить кастомную кнопку-стикер',
+        '/create "фраза" — создать новый набор',
+        '/update <пак> "фраза" — обновить первые 25 стикеров',
+        '/list — список ваших наборов',
+        '/font — выбрать шрифт',
+        '/color <цвет> — цвет букв (hex или rgb)',
+        '/stroke <цвет> — цвет обводки (hex или rgb)',
+        '/button <пак> — добавить кнопку-стикер в набор',
         '',
         'Пример:',
-        '/create Привет мир',
+        '/create "Привет  мир"',
       ].join('\n');
       await ctx.reply(message);
     });
 
     bot.command('create', async (ctx: Context) => {
-      const phrase = extractCommandText(ctx.message?.text);
+      const phrase = extractQuotedText(ctx.message?.text);
       if (!phrase) {
-        await ctx.reply('Укажите фразу: /create Привет мир');
+        await ctx.reply('Укажите фразу в кавычках: /create "Привет  мир"');
         return;
       }
       const telegramUserId = getTelegramUserId(ctx);
@@ -238,9 +323,10 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     });
 
     bot.command('update', async (ctx: Context) => {
-      const phrase = extractCommandText(ctx.message?.text);
+      const payload = parseUpdatePayload(ctx.message?.text);
+      const phrase = payload.phrase;
       if (!phrase) {
-        await ctx.reply('Укажите фразу: /update Новый текст');
+        await ctx.reply('Укажите набор и фразу: /update <пак> "Новый  текст"');
         return;
       }
       const telegramUserId = getTelegramUserId(ctx);
@@ -248,9 +334,19 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         await ctx.reply('Не удалось определить пользователя.');
         return;
       }
-      const pack = this.packManagerService.getPackForUser(telegramUserId);
+      if (!payload.packKey) {
+        await this.replyWithPackList(telegramUserId, ctx);
+        await ctx.reply(
+          'Укажите набор: /update <id|slug|название> "Новый  текст"',
+        );
+        return;
+      }
+      const pack = await this.packManagerService.getPackForUser(
+        telegramUserId,
+        payload.packKey,
+      );
       if (!pack) {
-        await ctx.reply('Сначала создайте набор через /create.');
+        await ctx.reply('Набор не найден. Проверьте id, slug или название.');
         return;
       }
       const validation = validatePhrase(phrase);
@@ -274,10 +370,17 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       );
       await ctx.reply('Обновляю первые 25 стикеров.');
       try {
+        const { style, stylePresetId } =
+          await this.usersService.getUserStyleForGeneration(
+            telegramUserId,
+            ctx.from?.username ?? null,
+          );
         const updatedPack = await this.packManagerService.updatePackStickers(
           pack,
           telegramUserId,
           validation.value,
+          style,
+          stylePresetId,
         );
         const link = buildPackLink(updatedPack.telegramPackId);
         const reply = link ? `Набор обновлён: ${link}` : 'Набор обновлён.';
@@ -291,15 +394,108 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       }
     });
 
+    bot.command('list', async (ctx: Context) => {
+      const telegramUserId = getTelegramUserId(ctx);
+      if (!telegramUserId) {
+        await ctx.reply('Не удалось определить пользователя.');
+        return;
+      }
+      await this.replyWithPackList(telegramUserId, ctx);
+    });
+
+    bot.command('font', async (ctx: Context) => {
+      const telegramUserId = getTelegramUserId(ctx);
+      if (!telegramUserId) {
+        await ctx.reply('Не удалось определить пользователя.');
+        return;
+      }
+      const input = stripWrappingQuotes(extractCommandText(ctx.message?.text));
+      const presets = await this.usersService.listStylePresets();
+      if (!input) {
+        await ctx.reply(this.formatStylePresets(presets));
+        return;
+      }
+      const preset = this.usersService.resolveStylePreset(input, presets);
+      if (!preset) {
+        await ctx.reply('Шрифт не найден. Доступные варианты:');
+        await ctx.reply(this.formatStylePresets(presets));
+        return;
+      }
+      await this.usersService.updateUserFont(
+        telegramUserId,
+        ctx.from?.username ?? null,
+        preset.id,
+      );
+      await ctx.reply(`Шрифт обновлён: ${preset.name}`);
+    });
+
+    bot.command('color', async (ctx: Context) => {
+      const telegramUserId = getTelegramUserId(ctx);
+      if (!telegramUserId) {
+        await ctx.reply('Не удалось определить пользователя.');
+        return;
+      }
+      const input = extractCommandText(ctx.message?.text);
+      if (!input) {
+        await ctx.reply(
+          'Укажите цвет: /color #ffcc00 или /color rgb(10,20,30)',
+        );
+        return;
+      }
+      const color = normalizeColorInput(input);
+      if (!color) {
+        await ctx.reply('Неверный цвет. Используйте hex или rgb(0,0,0).');
+        return;
+      }
+      await this.usersService.updateUserColors(
+        telegramUserId,
+        ctx.from?.username ?? null,
+        { fontColor: color },
+      );
+      await ctx.reply(`Цвет букв обновлён: ${color}`);
+    });
+
+    bot.command('stroke', async (ctx: Context) => {
+      const telegramUserId = getTelegramUserId(ctx);
+      if (!telegramUserId) {
+        await ctx.reply('Не удалось определить пользователя.');
+        return;
+      }
+      const input = extractCommandText(ctx.message?.text);
+      if (!input) {
+        await ctx.reply(
+          'Укажите цвет: /stroke #000000 или /stroke rgb(10,20,30)',
+        );
+        return;
+      }
+      const color = normalizeColorInput(input);
+      if (!color) {
+        await ctx.reply('Неверный цвет. Используйте hex или rgb(0,0,0).');
+        return;
+      }
+      await this.usersService.updateUserColors(
+        telegramUserId,
+        ctx.from?.username ?? null,
+        { strokeColor: color },
+      );
+      await ctx.reply(`Цвет обводки обновлён: ${color}`);
+    });
+
     bot.command('button', async (ctx: Context) => {
       const telegramUserId = getTelegramUserId(ctx);
       if (!telegramUserId) {
         await ctx.reply('Не удалось определить пользователя.');
         return;
       }
-      const pack = this.packManagerService.getPackForUser(telegramUserId);
+      const quoted = extractQuotedText(ctx.message?.text);
+      const input =
+        quoted ?? stripWrappingQuotes(extractCommandText(ctx.message?.text));
+      const pack = await this.packManagerService.getPackForUser(
+        telegramUserId,
+        input || null,
+      );
       if (!pack) {
-        await ctx.reply('Сначала создайте набор через /create.');
+        await ctx.reply('Набор не найден. Используйте /list для выбора.');
         return;
       }
       if (!this.isAllowed(telegramUserId, 'button', RATE_LIMITS.button)) {
@@ -313,7 +509,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       this.logger.log(
         `Custom button requested: user=${telegramUserId.toString()} pack=${pack.telegramPackId ?? pack.id}`,
       );
-      this.pendingCustomButtonUsers.add(telegramUserId);
+      this.pendingCustomButtonUsers.set(telegramUserId, pack.id);
       await ctx.reply(
         'Отправьте PNG или WebP с прозрачностью как файл (без сжатия).',
       );
@@ -340,6 +536,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       if (!this.pendingCustomButtonUsers.has(telegramUserId)) {
         return;
       }
+      const targetPackId = this.pendingCustomButtonUsers.get(telegramUserId);
       this.pendingCustomButtonUsers.delete(telegramUserId);
       const document = ctx.message?.document;
       if (!document) {
@@ -360,9 +557,12 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         await ctx.reply('Поддерживаются только PNG или WebP с прозрачностью.');
         return;
       }
-      const pack = this.packManagerService.getPackForUser(telegramUserId);
+      const pack = await this.packManagerService.getPackForUser(
+        telegramUserId,
+        targetPackId ?? null,
+      );
       if (!pack) {
-        await ctx.reply('Сначала создайте набор через /create.');
+        await ctx.reply('Набор не найден. Используйте /list для выбора.');
         return;
       }
       await ctx.reply('Проверяю и добавляю кнопку-стикер.');
@@ -406,10 +606,11 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     username: string | null,
     phrase: string,
   ): Promise<Pack> {
-    const user = await this.usersService.getOrCreateUser(
-      telegramUserId,
-      username,
-    );
+    const { user, style, stylePresetId } =
+      await this.usersService.getUserStyleForGeneration(
+        telegramUserId,
+        username,
+      );
     const pack = await this.packManagerService.createPack({
       ownerId: user.id,
       telegramUserId,
@@ -417,7 +618,8 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       slug: '',
       phrase,
       gridSize: 25,
-      stylePresetId: null,
+      stylePresetId,
+      style,
     });
 
     await this.jobsService.enqueuePackGeneration(pack.id);
@@ -467,6 +669,47 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       return 1;
     }
     return getRetryAfterSeconds(state);
+  }
+
+  private formatStylePresets(presets: StylePreset[]): string {
+    const lines = ['Доступные шрифты:'];
+    presets.forEach((preset, index) => {
+      lines.push(`${index + 1}. ${preset.name}`);
+    });
+    lines.push('');
+    lines.push('Пример: /font 2 или /font "Impact"');
+    return lines.join('\n');
+  }
+
+  private async replyWithPackList(
+    telegramUserId: bigint,
+    ctx: Context,
+  ): Promise<void> {
+    const packs =
+      await this.packManagerService.listPacksForUser(telegramUserId);
+    if (packs.length === 0) {
+      await ctx.reply('У вас пока нет наборов. Создайте через /create.');
+      return;
+    }
+    const lines = ['Ваши наборы:'];
+    packs.forEach((item, index) => {
+      const link = buildPackLink(item.pack.telegramPackId);
+      const date = item.pack.createdAt.toLocaleDateString('ru-RU');
+      const header = `${index + 1}. ${item.pack.title}`;
+      const meta = [
+        `id: ${item.pack.id}`,
+        `slug: ${item.pack.slug}`,
+        `стикеров: ${item.stickerCount}`,
+        `дата: ${date}`,
+      ].join(', ');
+      lines.push(header);
+      lines.push(meta);
+      if (link) {
+        lines.push(link);
+      }
+      lines.push('');
+    });
+    await ctx.reply(lines.join('\n'));
   }
 
   private logError(action: string, error: unknown): void {

@@ -5,6 +5,7 @@
 - telegramUserId
 - username
 - createdAt
+- settings
 
 ## Стикерпак
 - id
@@ -37,12 +38,22 @@
 
 ## Пресет стиля
 - id
+- name
 - fontFamily
 - fontSize
 - fontColor
 - strokeColor
 - backgroundColor
 - createdAt
+
+## Настройки пользователя
+- id
+- userId
+- stylePresetId
+- fontColor
+- strokeColor
+- createdAt
+- updatedAt
 
 ## Задача генерации
 - id

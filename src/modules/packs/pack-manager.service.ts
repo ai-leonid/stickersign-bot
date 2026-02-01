@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import sharp from 'sharp';
 import type { CreatePackInput, Pack, StylePreset } from '../../common/types';
+import { PrismaService } from '../../infrastructure/prisma/prisma.service';
 import { StickerGeneratorService } from '../stickers/sticker-generator.service';
 
 type TelegramApiResponse<T> = {
@@ -90,18 +91,6 @@ function getTelegramConfig(): TelegramConfig {
   return { token, botName };
 }
 
-function getDefaultStyle(): StylePreset {
-  return {
-    id: 'default',
-    fontFamily: 'Arial',
-    fontSize: 220,
-    fontColor: '#ffffff',
-    strokeColor: '#000000',
-    backgroundColor: 'transparent',
-    createdAt: new Date(),
-  };
-}
-
 function buildEmojiList(isPlaceholder: boolean): string[] {
   return isPlaceholder ? ['⬜️'] : ['🔤'];
 }
@@ -138,14 +127,57 @@ async function resizeToStickerBuffer(
 
 @Injectable()
 export class PackManagerService {
-  private readonly packsByUserId = new Map<bigint, Pack>();
-
   constructor(
     private readonly stickerGeneratorService: StickerGeneratorService,
+    private readonly prisma: PrismaService,
   ) {}
 
-  getPackForUser(telegramUserId: bigint): Pack | null {
-    return this.packsByUserId.get(telegramUserId) ?? null;
+  async getPackForUser(
+    telegramUserId: bigint,
+    identifier?: string | null,
+  ): Promise<Pack | null> {
+    const userId = await this.getUserId(telegramUserId);
+    if (!userId) {
+      return null;
+    }
+    if (!identifier) {
+      const pack = await this.prisma.pack.findFirst({
+        where: { ownerId: userId },
+        orderBy: { createdAt: 'desc' },
+      });
+      return pack ? this.mapPack(pack) : null;
+    }
+    const normalizedSlug = normalizeSlugValue(identifier);
+    const pack = await this.prisma.pack.findFirst({
+      where: {
+        ownerId: userId,
+        OR: [
+          { id: identifier },
+          { slug: normalizedSlug },
+          { title: { equals: identifier, mode: 'insensitive' } },
+        ],
+      },
+    });
+    return pack ? this.mapPack(pack) : null;
+  }
+
+  async listPacksForUser(
+    telegramUserId: bigint,
+  ): Promise<Array<{ pack: Pack; stickerCount: number }>> {
+    const userId = await this.getUserId(telegramUserId);
+    if (!userId) {
+      return [];
+    }
+    const packs = await this.prisma.pack.findMany({
+      where: { ownerId: userId },
+      orderBy: { createdAt: 'desc' },
+      include: { _count: { select: { stickers: true } } },
+      take: 20,
+    });
+    return packs.map((pack) => ({
+      pack: this.mapPack(pack),
+      stickerCount: pack._count.stickers,
+    }));
   }
 
   async createPack(input: CreatePackInput): Promise<Pack> {
@@ -156,8 +188,7 @@ export class PackManagerService {
       : buildSlug(baseTitle);
     const title = buildPackTitle(baseTitle);
     const telegramPackId = buildSetName(slug, config.botName);
-    const style = getDefaultStyle();
-    const stickers = await this.buildStickerPayloads(input.phrase, style);
+    const stickers = await this.buildStickerPayloads(input.phrase, input.style);
 
     await this.createTelegramStickerSet({
       name: telegramPackId,
@@ -166,32 +197,33 @@ export class PackManagerService {
       stickers,
     });
 
-    const pack: Pack = {
-      id: randomUUID(),
-      ownerId: input.ownerId,
-      title,
-      slug,
-      telegramPackId,
-      isCustomButtonEnabled: false,
-      phrase: input.phrase,
-      gridSize: input.gridSize,
-      stylePresetId: input.stylePresetId,
-      createdAt: new Date(),
-    };
-    this.packsByUserId.set(input.telegramUserId, pack);
-    return pack;
+    const createdPack = await this.prisma.pack.create({
+      data: {
+        ownerId: input.ownerId,
+        title,
+        slug,
+        telegramPackId,
+        isCustomButtonEnabled: false,
+        phrase: input.phrase,
+        gridSize: input.gridSize,
+        stylePresetId: input.stylePresetId,
+      },
+    });
+    await this.savePackStickers(createdPack.id, input.phrase);
+    return this.mapPack(createdPack);
   }
 
   async updatePackStickers(
     pack: Pack,
     telegramUserId: bigint,
     phrase: string,
+    style: StylePreset,
+    stylePresetId: string,
   ): Promise<Pack> {
     if (!pack.telegramPackId) {
       throw new Error('Telegram pack id is missing');
     }
 
-    const style = getDefaultStyle();
     const stickers = await this.buildStickerPayloads(phrase, style);
     await this.updateTelegramStickerSet({
       name: pack.telegramPackId,
@@ -199,12 +231,12 @@ export class PackManagerService {
       stickers,
     });
 
-    const updatedPack: Pack = {
-      ...pack,
-      phrase,
-    };
-    this.packsByUserId.set(telegramUserId, updatedPack);
-    return updatedPack;
+    const updatedPack = await this.prisma.pack.update({
+      where: { id: pack.id },
+      data: { phrase, stylePresetId },
+    });
+    await this.savePackStickers(updatedPack.id, phrase);
+    return this.mapPack(updatedPack);
   }
 
   async addCustomButtonSticker(
@@ -250,12 +282,11 @@ export class PackManagerService {
       });
     }
 
-    const updatedPack: Pack = {
-      ...pack,
-      isCustomButtonEnabled: true,
-    };
-    this.packsByUserId.set(telegramUserId, updatedPack);
-    return updatedPack;
+    const updatedPack = await this.prisma.pack.update({
+      where: { id: pack.id },
+      data: { isCustomButtonEnabled: true },
+    });
+    return this.mapPack(updatedPack);
   }
 
   private async buildStickerPayloads(
@@ -316,6 +347,55 @@ export class PackManagerService {
     }
 
     throw new Error('Custom button sticker size exceeds Telegram limit');
+  }
+
+  private async savePackStickers(
+    packId: string,
+    phrase: string,
+  ): Promise<void> {
+    const cells = this.stickerGeneratorService.buildGrid(phrase);
+    await this.prisma.sticker.deleteMany({ where: { packId } });
+    await this.prisma.sticker.createMany({
+      data: cells.map((cell) => ({
+        packId,
+        position: cell.position,
+        letter: cell.letter,
+        isPlaceholder: cell.isPlaceholder,
+      })),
+    });
+  }
+
+  private async getUserId(telegramUserId: bigint): Promise<string | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { telegramUserId },
+    });
+    return user?.id ?? null;
+  }
+
+  private mapPack(record: {
+    id: string;
+    ownerId: string;
+    title: string;
+    slug: string;
+    telegramPackId: string | null;
+    isCustomButtonEnabled: boolean;
+    phrase: string;
+    gridSize: number;
+    stylePresetId: string | null;
+    createdAt: Date;
+  }): Pack {
+    return {
+      id: record.id,
+      ownerId: record.ownerId,
+      title: record.title,
+      slug: record.slug,
+      telegramPackId: record.telegramPackId,
+      isCustomButtonEnabled: record.isCustomButtonEnabled,
+      phrase: record.phrase,
+      gridSize: record.gridSize,
+      stylePresetId: record.stylePresetId,
+      createdAt: record.createdAt,
+    };
   }
 
   private async createTelegramStickerSet(input: {

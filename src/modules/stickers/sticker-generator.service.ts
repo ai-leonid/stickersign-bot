@@ -5,7 +5,7 @@ import type { SKRSContext2D } from '@napi-rs/canvas';
 import sharp from 'sharp';
 import type { StylePreset } from '../../common/types';
 
-type GridCell = {
+export type GridCell = {
   position: number;
   letter: string | null;
   isPlaceholder: boolean;
@@ -20,10 +20,9 @@ function normalizeText(value: string): string {
     .replace(/\r/g, '\n')
     .replace(/\t/g, ' ')
     .normalize('NFC');
-
   return normalized
     .split('\n')
-    .map((line) => line.replace(/ {2,}/g, ' '))
+    .map((line) => line.replace(/ +$/g, ''))
     .join('\n');
 }
 
@@ -31,6 +30,7 @@ function buildGridCells(text: string): GridCell[] {
   const cells: GridCell[] = [];
   let row = 0;
   let col = 0;
+  let wrapped = false;
 
   for (const char of Array.from(text)) {
     if (row >= GRID_SIZE) {
@@ -40,6 +40,21 @@ function buildGridCells(text: string): GridCell[] {
     if (char === '\n') {
       row += 1;
       col = 0;
+      wrapped = false;
+      continue;
+    }
+
+    if (col >= GRID_SIZE) {
+      row += 1;
+      col = 0;
+      wrapped = true;
+      if (row >= GRID_SIZE) {
+        break;
+      }
+    }
+
+    if (char === ' ' && col === 0 && wrapped) {
+      wrapped = false;
       continue;
     }
 
@@ -59,6 +74,9 @@ function buildGridCells(text: string): GridCell[] {
     if (col >= GRID_SIZE) {
       row += 1;
       col = 0;
+      wrapped = true;
+    } else {
+      wrapped = false;
     }
   }
 

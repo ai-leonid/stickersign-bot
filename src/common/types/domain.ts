@@ -47,12 +47,23 @@ export type MediaFile = {
 
 export type StylePreset = {
   id: string;
+  name: string;
   fontFamily: string;
   fontSize: number;
   fontColor: string;
   strokeColor: string;
   backgroundColor: string;
   createdAt: Date;
+};
+
+export type UserSettings = {
+  id: string;
+  userId: string;
+  stylePresetId: string;
+  fontColor: string;
+  strokeColor: string;
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 export type GenerationJob = {
@@ -71,6 +82,7 @@ export type CreatePackInput = {
   phrase: string;
   gridSize: number;
   stylePresetId: string | null;
+  style: StylePreset;
 };
 
 export type MediaFileInput = {

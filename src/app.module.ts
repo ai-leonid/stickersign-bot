@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { PrismaModule } from './infrastructure/prisma/prisma.module';
 import { BotModule } from './modules/bot/bot.module';
 import { JobsModule } from './modules/jobs/jobs.module';
 import { MediaModule } from './modules/media/media.module';
@@ -10,6 +11,7 @@ import { AppService } from './app.service';
 
 @Module({
   imports: [
+    PrismaModule,
     BotModule,
     PacksModule,
     StickersModule,

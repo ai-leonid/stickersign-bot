@@ -9,4 +9,5 @@ export type {
   Sticker,
   StylePreset,
   User,
+  UserSettings,
 } from './domain';
