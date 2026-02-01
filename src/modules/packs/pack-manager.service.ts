@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
+import sharp from 'sharp';
 import type { CreatePackInput, Pack, StylePreset } from '../../common/types';
 import { StickerGeneratorService } from '../stickers/sticker-generator.service';
 
@@ -35,6 +36,9 @@ type TelegramConfig = {
 const MAX_STATIC_STICKERS = 120;
 const MAX_STICKER_SIZE_BYTES = 512 * 1024;
 const MAX_PACK_TITLE_LENGTH = 64;
+const CUSTOM_BUTTON_SIZE = 512;
+const CUSTOM_BUTTON_EMOJI = ['➕'];
+const ALLOWED_CUSTOM_FORMATS = new Set(['png', 'webp']);
 
 function sanitizeBotName(name: string): string {
   return name.replace(/^@/, '').trim();
@@ -112,6 +116,26 @@ function toArrayBuffer(buffer: Buffer): ArrayBuffer {
   return arrayBuffer;
 }
 
+async function resizeToStickerBuffer(
+  input: Buffer,
+  quality: number | null,
+): Promise<Buffer> {
+  const pipeline = sharp(input, { failOnError: true }).resize(
+    CUSTOM_BUTTON_SIZE,
+    CUSTOM_BUTTON_SIZE,
+    {
+      fit: 'contain',
+      background: { r: 0, g: 0, b: 0, alpha: 0 },
+    },
+  );
+
+  if (quality === null) {
+    return pipeline.webp({ lossless: true }).toBuffer();
+  }
+
+  return pipeline.webp({ quality }).toBuffer();
+}
+
 @Injectable()
 export class PackManagerService {
   constructor(
@@ -173,6 +197,55 @@ export class PackManagerService {
     };
   }
 
+  async addCustomButtonSticker(
+    pack: Pack,
+    telegramUserId: bigint,
+    imageBuffer: Buffer,
+  ): Promise<Pack> {
+    if (!pack.telegramPackId) {
+      throw new Error('Telegram pack id is missing');
+    }
+
+    const preparedBuffer = await this.prepareCustomButtonBuffer(imageBuffer);
+    const stickerSet = await this.getStickerSet(pack.telegramPackId);
+    const existingCount = stickerSet.stickers.length;
+    const shouldReplace = pack.isCustomButtonEnabled && existingCount > 0;
+    const projectedCount = shouldReplace ? existingCount : existingCount + 1;
+
+    if (projectedCount > MAX_STATIC_STICKERS) {
+      throw new Error('Sticker set exceeds Telegram limit');
+    }
+
+    const payload: StickerPayload = {
+      buffer: preparedBuffer,
+      emojiList: CUSTOM_BUTTON_EMOJI,
+    };
+
+    if (shouldReplace) {
+      const lastStickerId = stickerSet.stickers[existingCount - 1]?.file_id;
+      if (!lastStickerId) {
+        throw new Error('Custom button sticker replacement failed');
+      }
+      await this.replaceStickerInSet({
+        name: pack.telegramPackId,
+        userId: telegramUserId,
+        oldStickerId: lastStickerId,
+        payload,
+      });
+    } else {
+      await this.addStickerToSet({
+        name: pack.telegramPackId,
+        userId: telegramUserId,
+        payload,
+      });
+    }
+
+    return {
+      ...pack,
+      isCustomButtonEnabled: true,
+    };
+  }
+
   private async buildStickerPayloads(
     phrase: string,
     style: StylePreset,
@@ -200,6 +273,37 @@ export class PackManagerService {
         emojiList: buildEmojiList(cell.isPlaceholder || !cell.letter),
       };
     });
+  }
+
+  private async prepareCustomButtonBuffer(
+    imageBuffer: Buffer,
+  ): Promise<Buffer> {
+    if (imageBuffer.byteLength === 0) {
+      throw new Error('Custom button image is empty');
+    }
+
+    const metadata = await sharp(imageBuffer, { failOnError: true }).metadata();
+    const format = metadata.format ?? '';
+    if (!ALLOWED_CUSTOM_FORMATS.has(format)) {
+      throw new Error('Unsupported custom button image format');
+    }
+    if (!metadata.hasAlpha) {
+      throw new Error('Custom button image must have transparency');
+    }
+
+    const lossless = await resizeToStickerBuffer(imageBuffer, null);
+    if (lossless.byteLength <= MAX_STICKER_SIZE_BYTES) {
+      return lossless;
+    }
+
+    for (const quality of [90, 80, 70, 60]) {
+      const candidate = await resizeToStickerBuffer(imageBuffer, quality);
+      if (candidate.byteLength <= MAX_STICKER_SIZE_BYTES) {
+        return candidate;
+      }
+    }
+
+    throw new Error('Custom button sticker size exceeds Telegram limit');
   }
 
   private async createTelegramStickerSet(input: {
