@@ -42,7 +42,8 @@ export class UsersService {
   }> {
     const user = await this.getOrCreateUser(telegramUserId, username);
     const presets = await this.ensureStylePresets();
-    const defaultPreset = presets[0];
+    const defaultPreset =
+      presets.find((preset) => preset.fontFamily === 'Roboto') ?? presets[0];
     const settings = await this.prisma.userSettings.upsert({
       where: { userId: user.id },
       update: {},
