@@ -7,34 +7,24 @@ export type FontPresetConfig = {
 
 export const fontPresets: FontPresetConfig[] = [
   {
-    name: 'Arial Black',
-    fontFamily: 'Arial Black',
-  },
-  {
-    name: 'Comic Sans MS',
-    fontFamily: 'Comic Sans MS',
-  },
-  {
-    name: 'Impact',
-    fontFamily: 'Impact',
-  },
-  {
-    name: 'Trebuchet MS',
-    fontFamily: 'Trebuchet MS',
-  },
-  {
-    name: 'Georgia',
-    fontFamily: 'Georgia',
-  },
-  {
     name: 'Caveat',
     fontFamily: 'Caveat',
     file: 'Caveat/Caveat-Regular.ttf',
   },
   {
+    name: 'Comic_Relief',
+    fontFamily: 'Caveat',
+    file: 'Comic_Relief/ComicRelief-Regular.ttf',
+  },
+  {
     name: 'Dela_Gothic_One',
     fontFamily: 'Dela_Gothic_One',
     file: 'Dela_Gothic_One/DelaGothicOne-Regular.ttf',
+  },
+  {
+    name: 'Google_Sans_Code',
+    fontFamily: 'Google_Sans_Code',
+    file: 'Google_Sans_Code/GoogleSansCode-Regular.ttf',
   },
   {
     name: 'Kablammo',
@@ -50,6 +40,11 @@ export const fontPresets: FontPresetConfig[] = [
     name: 'Rampart_One',
     fontFamily: 'Rampart_One',
     file: 'Rampart_One/RampartOne-Regular.ttf',
+  },
+  {
+    name: 'Roboto',
+    fontFamily: 'Roboto',
+    file: 'Roboto/Roboto_Condensed-Regular.ttf',
   },
   {
     name: 'Rubik_Distressed',
@@ -70,5 +65,10 @@ export const fontPresets: FontPresetConfig[] = [
     name: 'Stalinist_One',
     fontFamily: 'Stalinist_One',
     file: 'Stalinist_One/StalinistOne-Regular.ttf',
+  },
+  {
+    name: 'Tinos',
+    fontFamily: 'Tinos',
+    file: 'Tinos/Tinos-Regular.ttf',
   },
 ];
