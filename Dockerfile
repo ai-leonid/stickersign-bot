@@ -7,7 +7,6 @@ COPY package*.json ./
 RUN npm ci
 COPY . .
 
-RUN npx prisma migrate deploy
 RUN npx prisma generate
 RUN npm run build
 
@@ -40,4 +39,4 @@ EXPOSE ${PORT}
 
 ENTRYPOINT ["dumb-init", "--"]
 
-CMD ["node", "dist/main.js"]
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/src/main.js"]
